@@ -432,7 +432,16 @@ class SystemSetting(Base):
 
 # ─────────────────────────── Engine / Session ───────────────────────────
 
-def get_engine(db_path="sis_uoe.db"):
+def get_engine(db_path="sis_uoe.db", database_url=None):
+    """
+    Returns a SQLAlchemy engine. If database_url is given (e.g. a Postgres
+    connection string from Streamlit secrets/env), connects to that instead
+    of local SQLite — this is what makes the database persist across
+    Streamlit Cloud restarts/redeploys, since the local filesystem there is
+    ephemeral. db_path is only used for the SQLite fallback (local dev).
+    """
+    if database_url:
+        return create_engine(database_url, echo=False, pool_pre_ping=True)
     return create_engine(f"sqlite:///{db_path}", echo=False, connect_args={"check_same_thread": False})
 
 

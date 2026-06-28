@@ -156,7 +156,33 @@ Students, Courses, and Payments via CSV/XLSX, with downloadable templates.
 - **Delete All Courses** (Admin only, requires typing `DELETE`) — wipes
   the catalogue with no replacement.
 
-## 8. Security Notes Before Going Live
+## 8. Deploying to Streamlit Cloud
+
+Streamlit Community Cloud's filesystem is **ephemeral** — it resets on every
+restart/redeploy. SQLite (`sis_uoe.db`) cannot be used for real data there;
+you need a real persistent database (Postgres).
+
+1. **Provision a hosted Postgres database** — any provider works (Supabase,
+   Neon, Railway, etc.); you just need a standard
+   `postgresql://user:pass@host:port/dbname` connection string.
+2. **Migrate existing local data** (skip if starting fresh):
+   ```bash
+   export TARGET_DATABASE_URL="postgresql://...your-connection-string..."
+   python migrate_sqlite_to_postgres.py
+   ```
+   Copies every table from local `sis_uoe.db` into the target, preserving
+   IDs/relationships, and resets Postgres's auto-increment sequences.
+   Refuses to run against a non-empty target (won't duplicate data).
+3. **Configure the secret** — locally, copy `.streamlit/secrets.toml.example`
+   to `.streamlit/secrets.toml` (gitignored) and fill in `DATABASE_URL`. On
+   Streamlit Cloud, paste the same `DATABASE_URL = "..."` line into the
+   app's **Settings → Secrets**.
+4. **Deploy** — connect this GitHub repo in Streamlit Cloud, set the main
+   file to `app.py`, and deploy. With `DATABASE_URL` configured it connects
+   to Postgres automatically (`utils/db.py` falls back to local SQLite only
+   when no secret is present).
+
+## 9. Security Notes Before Going Live
 
 - Change every default password (see §2) — especially the shared student
   default if real student accounts were bulk-imported.
