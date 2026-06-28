@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+*.db
+*.db.bak*
+.venv/
+venv/
+.streamlit/secrets.toml
+*.egg-info/
+.DS_Store
+.idea/
+
+# Real student/financial data — never commit. Reconciliation exports and
+# any one-off data exports derived from live institution data live here;
+# only sample/demo templates with fake data belong under data_entry_templates/.
+migration_exports/
+data_uploads/
+data_entry_templates/*_accurate.csv

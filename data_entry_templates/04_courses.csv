@@ -1,0 +1,16 @@
+code,name,programme_code,semester,year_level,credits,is_core
+401GEN114,Introduction to Information Management and Computer Fundamentals,401,1,1,3,TRUE
+401PUB121,Introduction to Public Health,401,1,1,3,TRUE
+401ANA131,Human Anatomy and Physiology I,401,1,1,4,TRUE
+401BIO141,Biostatistics I,401,1,1,3,TRUE
+401SOC151,Introduction to Sociology,401,2,1,3,TRUE
+401PUB122,Epidemiology I,401,2,1,3,TRUE
+401ELE001,Health Communication,401,0,1,3,FALSE
+400GEN114,Introduction to Information Management and Computer Fundamentals,400,1,1,3,TRUE
+400CLI121,Fundamentals of Clinical Medicine,400,1,1,4,TRUE
+400ANA131,Human Anatomy and Physiology I,400,1,1,4,TRUE
+400ELE001,Medical Ethics,400,0,1,3,FALSE
+373PME101,Principles of Project Management,373,1,1,3,TRUE
+373RES111,Research Methods,373,1,1,3,TRUE
+373MON121,Monitoring and Evaluation Frameworks,373,2,1,3,TRUE
+373ELE001,Strategic Leadership,373,0,1,3,FALSE
