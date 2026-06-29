@@ -15,3 +15,5 @@ venv/
 migration_exports/
 data_uploads/
 data_entry_templates/*_accurate.csv
+*_backup_*.csv
+payments_backup*.csv
