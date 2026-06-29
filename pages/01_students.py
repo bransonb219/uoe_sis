@@ -10,6 +10,7 @@ from utils.auth import require_login, log_action
 from utils.ui import render_sidebar, page_header, status_badge
 from models import Student, Programme, User, StudentStatus, Gender, UserRole, ModeOfStudy, Intake
 from utils.auth import hash_password
+from utils.results_logic import get_academic_year_for_progress
 from datetime import datetime
 import pandas as pd
 
@@ -107,6 +108,7 @@ with tab_list:
                 "Intake": s.intake.code if s.intake else "",
                 "Year": s.year_of_study,
                 "Semester": s.current_semester,
+                "Academic Year": s.academic_year or "",
                 "Status": s.status.value if s.status else "",
                 "Email": s.email or "",
             })
@@ -122,9 +124,14 @@ with tab_list:
 if can_manage:
     with tab_add:
         st.subheader("Register New Student")
-        from models import AcademicYear as _AcademicYear
-        academic_years_opts = [ay.label for ay in db.query(_AcademicYear).filter_by(is_active=True).order_by(_AcademicYear.label).all()]
         intake_opts = db.query(Intake).order_by(Intake.code).all()
+        st.caption(
+            "Academic Year is no longer picked separately — it's derived "
+            "automatically from Intake + Year of Study + Current Semester, "
+            "via the cohort-progress mapping in Settings → Intakes & "
+            "Cohorts. This keeps it from ever drifting out of sync with the "
+            "student's actual cohort."
+        )
         with st.form("add_student_form"):
             c1, c2 = st.columns(2)
             with c1:
@@ -138,10 +145,6 @@ if can_manage:
                 prog_sel = st.selectbox("Programme *", [p.name for p in programmes])
                 year_of_study = st.number_input("Year of Study", 1, 6, 1)
                 current_semester_sel = st.selectbox("Current Semester", [1, 2])
-                academic_year = (
-                    st.selectbox("Academic Year", academic_years_opts) if academic_years_opts
-                    else st.text_input("Academic Year", value="2024/2025")
-                )
                 mode_sel = st.selectbox("Mode of Study *", [m.value for m in ModeOfStudy])
                 email = st.text_input("Email")
                 phone = st.text_input("Phone")
@@ -161,13 +164,26 @@ if can_manage:
             submitted = st.form_submit_button("Register Student", type="primary")
 
         if submitted:
+            intake_obj = next((i for i in intake_opts if i.code == intake_sel), None) if intake_sel else None
+            derived_academic_year = (
+                get_academic_year_for_progress(db, intake_obj.id, year_of_study, current_semester_sel)
+                if intake_obj else None
+            )
             if not all([first_name, last_name, student_number]):
                 st.error("First Name, Last Name, and Student Number are required.")
             elif db.query(Student).filter_by(student_number=student_number).first():
                 st.error(f"Student number {student_number} already exists.")
+            elif not intake_obj:
+                st.error("Select an Intake — add one in Settings → Intakes & Cohorts first if none exist.")
+            elif not derived_academic_year:
+                st.error(
+                    f"No cohort-progress mapping for intake '{intake_sel}' Year {year_of_study} "
+                    f"Semester {current_semester_sel}. Set this up in Settings → Intakes & Cohorts "
+                    f"(or via Promote Cohort) before registering students into this period."
+                )
             else:
                 prog_obj = next(p for p in programmes if p.name == prog_sel)
-                intake_obj = next((i for i in intake_opts if i.code == intake_sel), None) if intake_sel else None
+                academic_year = derived_academic_year
                 s = Student(
                     student_number=student_number,
                     first_name=first_name, last_name=last_name, other_names=other_names or None,
@@ -216,10 +232,13 @@ if can_manage:
             if not s:
                 st.error("Student not found.")
             else:
-                from models import AcademicYear as _AcademicYear2
                 edit_intakes = db.query(Intake).order_by(Intake.code).all()
-                edit_academic_years = db.query(_AcademicYear2).filter_by(is_active=True).order_by(_AcademicYear2.label).all()
                 edit_programmes = db.query(Programme).filter_by(is_active=True).all()
+                st.caption(
+                    f"Current academic year on record: **{s.academic_year or 'none'}**. "
+                    f"This is derived from Intake + Year of Study + Current Semester on save — "
+                    f"it's not editable directly."
+                )
 
                 with st.form("edit_student"):
                     st.markdown("##### Registration Details")
@@ -236,9 +255,6 @@ if can_manage:
                         yr = st.number_input("Year of Study", 1, 6, value=s.year_of_study or 1)
                         sem_edit = st.selectbox("Current Semester", [1, 2],
                                                  index=(s.current_semester - 1) if s.current_semester in (1, 2) else 0)
-                        ay_labels = [ay.label for ay in edit_academic_years]
-                        ay_idx = ay_labels.index(s.academic_year) if s.academic_year in ay_labels else 0
-                        ay_edit_sel = st.selectbox("Academic Year", ay_labels, index=ay_idx) if ay_labels else st.text_input("Academic Year", value=s.academic_year or "")
                     with c3:
                         mode_edit_sel = st.selectbox("Mode of Study", [m.value for m in ModeOfStudy],
                                                       index=[m.value for m in ModeOfStudy].index(s.mode_of_study.value) if s.mode_of_study else 0)
@@ -276,31 +292,44 @@ if can_manage:
                         nok_phone_edit = st.text_input("Next of Kin Phone", value=s.next_of_kin_phone or "")
 
                     if st.form_submit_button("Save Changes", type="primary"):
-                        s.first_name = fn; s.last_name = ln; s.other_names = on or None
-                        s.email = em or None; s.phone = ph or None
-                        s.gender = gender_edit
-                        s.date_of_birth = datetime.combine(dob_edit, datetime.min.time())
-                        s.national_id = national_id_edit or None
-                        s.nationality = nationality_edit or None
-                        s.address = address_edit or None
-                        s.marital_status = marital_status_edit or None
-                        s.next_of_kin_name = nok_name_edit or None
-                        s.next_of_kin_phone = nok_phone_edit or None
+                        target_intake = next((i for i in edit_intakes if i.code == intake_edit_sel), None) if intake_edit_sel else s.intake
+                        derived_academic_year = (
+                            get_academic_year_for_progress(db, target_intake.id, yr, sem_edit)
+                            if target_intake else None
+                        )
+                        if not target_intake:
+                            st.error("Select an Intake — add one in Settings → Intakes & Cohorts first if none exist.")
+                        elif not derived_academic_year:
+                            st.error(
+                                f"No cohort-progress mapping for intake '{target_intake.code}' Year {yr} "
+                                f"Semester {sem_edit}. Set this up in Settings → Intakes & Cohorts "
+                                f"(or via Promote Cohort) before saving this combination."
+                            )
+                        else:
+                            s.first_name = fn; s.last_name = ln; s.other_names = on or None
+                            s.email = em or None; s.phone = ph or None
+                            s.gender = gender_edit
+                            s.date_of_birth = datetime.combine(dob_edit, datetime.min.time())
+                            s.national_id = national_id_edit or None
+                            s.nationality = nationality_edit or None
+                            s.address = address_edit or None
+                            s.marital_status = marital_status_edit or None
+                            s.next_of_kin_name = nok_name_edit or None
+                            s.next_of_kin_phone = nok_phone_edit or None
 
-                        if prog_edit_sel:
-                            s.programme_id = next(p.id for p in edit_programmes if p.name == prog_edit_sel)
-                        if intake_edit_sel:
-                            s.intake_id = next(i.id for i in edit_intakes if i.code == intake_edit_sel)
-                        s.year_of_study = yr
-                        s.current_semester = sem_edit
-                        s.academic_year = ay_edit_sel
-                        s.mode_of_study = mode_edit_sel
-                        s.fee_adjustment = fee_adj_edit
-                        s.status = st_status
-                        s.updated_at = datetime.utcnow()
-                        db.commit()
-                        log_action(db, "EDIT_STUDENT", "Student", s.id, f"Updated {snum}")
-                        st.success("Record updated successfully.")
-                        st.rerun()
+                            if prog_edit_sel:
+                                s.programme_id = next(p.id for p in edit_programmes if p.name == prog_edit_sel)
+                            s.intake_id = target_intake.id
+                            s.year_of_study = yr
+                            s.current_semester = sem_edit
+                            s.academic_year = derived_academic_year
+                            s.mode_of_study = mode_edit_sel
+                            s.fee_adjustment = fee_adj_edit
+                            s.status = st_status
+                            s.updated_at = datetime.utcnow()
+                            db.commit()
+                            log_action(db, "EDIT_STUDENT", "Student", s.id, f"Updated {snum}")
+                            st.success("Record updated successfully.")
+                            st.rerun()
 
 db.close()

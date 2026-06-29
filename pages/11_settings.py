@@ -282,6 +282,36 @@ with tab_intakes:
         st.dataframe(pd.DataFrame(prows), use_container_width=True, hide_index=True)
 
     st.markdown("---")
+    st.subheader("Academic Year Overview")
+    st.caption(
+        "The table above is grouped by intake. This one flips it around: "
+        "for each calendar Academic Year, which intake(s) are actually in "
+        "it, and at what stage. An academic year usually has just one "
+        "intake active in it, but since intakes are offset (e.g. one "
+        "starting January, another in July), it can have more than one "
+        "at the same time — each at a different year/semester of their "
+        "own programme."
+    )
+    by_ay = {}
+    for p in progress_rows:
+        by_ay.setdefault(p.academic_year.label, []).append(p)
+    if by_ay:
+        for ay_label in sorted(by_ay.keys()):
+            steps = by_ay[ay_label]
+            st.markdown(f"**{ay_label}**")
+            ay_rows = [{
+                "Intake": p.intake.code, "Intake Label": p.intake.label,
+                "Year of Study": p.year_of_study, "Semester": p.semester_of_study,
+                "Current": "Yes" if p.is_current else "",
+            } for p in steps]
+            st.dataframe(pd.DataFrame(ay_rows), use_container_width=True, hide_index=True)
+            if len(steps) > 1:
+                st.caption(f"⚠️ {len(steps)} intake-steps share this academic year — "
+                           f"make sure anyone reading reports for {ay_label} knows which cohort each row belongs to.")
+    else:
+        st.info("No cohort-progress steps recorded yet.")
+
+    st.markdown("---")
     st.subheader("Promote Cohort")
     st.caption(
         "Advances every active student in an intake to a new (year of "

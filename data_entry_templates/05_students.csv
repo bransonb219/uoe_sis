@@ -1,5 +1,5 @@
-student_number,first_name,last_name,other_names,gender,date_of_birth,national_id,email,phone,programme_code,year_of_study,academic_year
-401/2024/001,Jane,,Mutale,Female,2002-03-15,987654/10/1,jane.mutale@student.ue.ac.zm,+260971000001,401,1,2024/2025
-401/2024/002,John,Banda,,Male,2001-07-22,123456/10/1,john.banda@student.ue.ac.zm,+260971000002,401,1,2024/2025
-400/2024/001,Mary,Phiri,,Female,2000-11-05,234567/10/1,mary.phiri@student.ue.ac.zm,+260971000003,400,1,2024/2025
-373/2024/001,Charles,Mulenga,,Male,1990-04-18,345678/10/1,charles.mulenga@student.ue.ac.zm,+260971000004,373,1,2024/2025
+student_number,first_name,last_name,other_names,gender,email,phone,programme_code,intake_code,year_of_study,current_semester,mode_of_study
+401/2025/001,Jane,Mutale,,Female,jane.mutale@student.ue.ac.zm,+260971000001,401,JAN2025,1,1,Full-Time
+401/2025/002,John,Banda,,Male,john.banda@student.ue.ac.zm,+260971000002,401,JAN2025,1,1,Full-Time
+400/2025/001,Mary,Phiri,,Female,mary.phiri@student.ue.ac.zm,+260971000003,400,JUL2025,1,2,ODeL
+373/2025/001,Charles,Mulenga,,Male,charles.mulenga@student.ue.ac.zm,+260971000004,373,JAN2026,1,1,Full-Time

@@ -322,3 +322,17 @@ def metric_card(label: str, value, color: str = "#1a3a5c", sub: str = ""):
         + "</div>",
         unsafe_allow_html=True
     )
+
+
+def format_academic_period(student) -> str:
+    """
+    Renders a student's cohort + progress + calendar year together, e.g.
+    "JAN2025 · Year 2, Semester 1 · AY 2025/2026" — so intake and academic
+    year are never shown in isolation where the two could be confused
+    (an intake spans multiple academic years over its lifetime, and a
+    single academic year can have more than one intake active in it).
+    """
+    intake_part = student.intake.code if student.intake else "No Intake"
+    year_part = f"Year {student.year_of_study}, Semester {student.current_semester}" if student.year_of_study else "—"
+    ay_part = f"AY {student.academic_year}" if student.academic_year else "AY —"
+    return f"{intake_part} · {year_part} · {ay_part}"

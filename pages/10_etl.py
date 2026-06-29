@@ -12,9 +12,10 @@ from utils.ui import render_sidebar, page_header
 from models import (
     Student, Programme, Course, Registration, StudentCourse,
     Payment, User, FeeStructure, Gender, StudentStatus, EnrolmentStatus,
-    UserRole, PaymentStatus, ModeOfStudy, ProgrammeLevel, Result, Exemption
+    UserRole, PaymentStatus, ModeOfStudy, ProgrammeLevel, Result, Exemption,
+    Intake,
 )
-from utils.results_logic import allocate_payment
+from utils.results_logic import allocate_payment, get_academic_year_for_progress
 from datetime import datetime
 import pandas as pd
 import io
@@ -304,8 +305,17 @@ with tab_students:
     st.subheader("Import Students")
     st.caption(
         "Required columns: student_number, first_name, last_name, gender, programme_code, "
-        "year_of_study, academic_year, mode_of_study. Optional: email, phone, other_names. "
-        "mode_of_study: Full-Time | ODeL. Username = student_number. Default password: Student@2026"
+        "intake_code, year_of_study, current_semester, mode_of_study. Optional: email, phone, "
+        "other_names. mode_of_study: Full-Time | ODeL. Username = student_number. "
+        "Default password: Student@2026"
+    )
+    st.info(
+        "**academic_year is no longer a column you fill in.** It's derived automatically from "
+        "intake_code + year_of_study + current_semester, via the cohort-progress mapping set up "
+        "in Settings → Intakes & Cohorts. This is what keeps every student's academic year "
+        "consistent with their intake instead of being separately (and sometimes wrongly) typed. "
+        "If a row's intake/year/semester combination has no mapping yet, that row is rejected with "
+        "a clear error — set up the mapping there first (or via Promote Cohort), then re-import."
     )
     f_students = st.file_uploader("Upload Students File", type=["xlsx", "xls", "csv"], key="up_students")
 
@@ -318,7 +328,8 @@ with tab_students:
 
         if df is not None:
             df.columns = [c.lower().strip() for c in df.columns]
-            required = {"student_number", "first_name", "last_name", "gender", "programme_code", "year_of_study", "academic_year", "mode_of_study"}
+            required = {"student_number", "first_name", "last_name", "gender", "programme_code",
+                        "intake_code", "year_of_study", "current_semester", "mode_of_study"}
             missing = required - set(df.columns)
 
             if missing:
@@ -346,6 +357,25 @@ with tab_students:
                                 errors.append(f"Row {idx+2}: Invalid mode_of_study '{row['mode_of_study']}'")
                                 continue
 
+                            intake_code = str(row["intake_code"]).strip().upper()
+                            intake = db.query(Intake).filter_by(code=intake_code).first()
+                            if not intake:
+                                errors.append(f"Row {idx+2}: Unknown intake_code '{row['intake_code']}'")
+                                continue
+
+                            year_of_study = int(row["year_of_study"])
+                            current_semester = int(row["current_semester"])
+                            academic_year = get_academic_year_for_progress(
+                                db, intake.id, year_of_study, current_semester
+                            )
+                            if not academic_year:
+                                errors.append(
+                                    f"Row {idx+2}: No cohort-progress mapping for intake "
+                                    f"'{intake_code}' Year {year_of_study} Semester {current_semester} "
+                                    f"— set this up in Settings → Intakes & Cohorts (or Promote Cohort) first."
+                                )
+                                continue
+
                             s = Student(
                                 student_number=snum,
                                 first_name=str(row["first_name"]).strip(),
@@ -355,8 +385,10 @@ with tab_students:
                                 email=clean_str(row.get("email")) or None,
                                 phone=clean_str(row.get("phone")) or None,
                                 programme_id=prog.id,
-                                year_of_study=int(row["year_of_study"]),
-                                academic_year=str(row["academic_year"]).strip(),
+                                intake_id=intake.id,
+                                year_of_study=year_of_study,
+                                current_semester=current_semester,
+                                academic_year=academic_year,
                                 mode_of_study=mode,
                                 status=StudentStatus.ACTIVE
                             )
@@ -473,10 +505,13 @@ with tab_payments:
         "Required columns: student_number, amount. Optional: method, reference. "
         "Each amount is automatically allocated across the student's oldest "
         "unpaid semester(s) first — no single semester is ever pushed into "
-        "overpayment. academic_year/semester columns, if present, are kept "
-        "as a note for reference only and do NOT dictate where the payment "
-        "is applied. Rows are processed in file order, so list a student's "
-        "payments chronologically if they have more than one."
+        "overpayment. Leftover after clearing every known due is held as an "
+        "advance toward their nearest future semester; only genuine excess "
+        "beyond that is reported back and not recorded. academic_year/"
+        "semester columns, if present, are kept as a note for reference "
+        "only and do NOT dictate where the payment is applied. Rows are "
+        "processed in file order, so list a student's payments "
+        "chronologically if they have more than one."
     )
     f_payments = st.file_uploader("Upload Payments File", type=["xlsx", "xls", "csv"], key="up_payments")
 
@@ -521,7 +556,8 @@ with tab_payments:
                                 total_unallocated += result["unallocated"]
                                 errors.append(
                                     f"Row {idx+2} ({student.student_number}): K{result['unallocated']:,.2f} "
-                                    f"could not be allocated — exceeds all known dues, NOT recorded."
+                                    f"could not be allocated — exceeds all known dues plus one semester "
+                                    f"ahead, NOT recorded."
                                 )
                         except Exception as e:
                             errors.append(f"Row {idx+2}: {e}")
@@ -567,8 +603,8 @@ with tab_template:
     students_template = pd.DataFrame([{
         "student_number": "BCS2025001", "first_name": "Jane", "last_name": "Doe",
         "other_names": "", "gender": "Female", "email": "jane.doe@student.ue.ac.zm",
-        "phone": "+260971234567", "programme_code": "BCS", "year_of_study": 1,
-        "academic_year": "2025/2026", "mode_of_study": "Full-Time"
+        "phone": "+260971234567", "programme_code": "BCS", "intake_code": "JAN2025",
+        "year_of_study": 1, "current_semester": 1, "mode_of_study": "Full-Time"
     }])
     courses_template = pd.DataFrame([{
         "code": "BCS301", "name": "Software Engineering", "programme_code": "BCS",

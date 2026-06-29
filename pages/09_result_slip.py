@@ -188,10 +188,12 @@ slip_html = f"""
         <td class="label">Student Number:</td><td>{student.student_number}</td></tr>
     <tr><td class="label">Programme:</td><td>{student.programme.name if student.programme else 'N/A'}</td>
         <td class="label">Year of Study:</td><td>{student.year_of_study}</td></tr>
-    <tr><td class="label">Academic Year:</td><td>{academic_year}</td>
-        <td class="label">Semester:</td><td>{semester}</td></tr>
-    <tr><td class="label">Mode of Study:</td><td>{student.mode_of_study.value if student.mode_of_study else 'N/A'}</td>
-        <td class="label">Level:</td><td>{prog_level}</td></tr>
+    <tr><td class="label">Intake:</td><td>{student.intake.code if student.intake else 'N/A'}</td>
+        <td class="label">Academic Year:</td><td>{academic_year}</td></tr>
+    <tr><td class="label">Semester:</td><td>{semester}</td>
+        <td class="label">Mode of Study:</td><td>{student.mode_of_study.value if student.mode_of_study else 'N/A'}</td></tr>
+    <tr><td class="label">Level:</td><td>{prog_level}</td>
+        <td></td><td></td></tr>
   </table>
 
   <table class="results">

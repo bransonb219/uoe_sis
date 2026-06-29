@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from utils.db import get_db
 from utils.auth import require_login, log_action
-from utils.ui import render_sidebar, page_header, metric_card, status_badge
+from utils.ui import render_sidebar, page_header, metric_card, status_badge, format_academic_period
 from utils.results_logic import get_payment_percentage, get_cumulative_balance, allocate_payment
 from models import Student, Payment, FeeStructure, Programme, PaymentStatus, UserRole, AcademicYear, Intake
 from datetime import datetime
@@ -60,6 +60,7 @@ with tab_statement:
 
     if student:
         st.markdown(f"**{student.full_name}** — {student.student_number}")
+        st.caption(format_academic_period(student))
 
         academic_year = _academic_year_picker("Academic Year", student.academic_year or "2024/2025", "stmt_year")
 
@@ -128,8 +129,10 @@ with tab_record:
         st.caption(
             "Enter the total amount received. It's automatically allocated "
             "across the student's oldest unpaid semester(s) first — no "
-            "single semester is ever pushed into overpayment. Any amount "
-            "beyond all known dues is reported back, not recorded."
+            "single semester is ever pushed into overpayment. Any leftover "
+            "after clearing every known due is held as an advance toward "
+            "their nearest future semester. Only genuine excess beyond that "
+            "is reported back and not recorded."
         )
 
         lookup_snum = st.text_input("Student Number", key="record_payment_lookup")
@@ -180,13 +183,15 @@ with tab_record:
                 if result["payments_created"]:
                     st.success(f"Allocated K{result['allocated']:,.2f} for {student.full_name}:")
                     for p in result["payments_created"]:
-                        st.caption(f"  • {p.academic_year} Semester {p.semester}: K{p.amount:,.2f}")
+                        is_advance = result["advance_period"] and (p.academic_year, p.semester) == result["advance_period"]
+                        tag = " (advance — ahead of current semester)" if is_advance else ""
+                        st.caption(f"  • {p.academic_year} Semester {p.semester}: K{p.amount:,.2f}{tag}")
                 if result["unallocated"] > 0:
                     st.warning(
                         f"K{result['unallocated']:,.2f} could NOT be allocated — it exceeds all "
-                        f"known dues through {student.full_name}'s current semester. This amount "
-                        f"has NOT been recorded. If it's an advance for an upcoming semester, wait "
-                        f"until that period is opened (Promote Cohort) before recording it."
+                        f"known dues plus one semester ahead for {student.full_name}. This amount "
+                        f"has NOT been recorded. Double-check the amount, or hold it until a further "
+                        f"semester is opened (Promote Cohort) before recording it."
                     )
                 if not result["payments_created"] and result["unallocated"] == 0:
                     st.info("Nothing to allocate — no fee structure found for this student's periods.")

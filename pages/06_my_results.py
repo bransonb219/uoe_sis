@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from utils.db import get_db
 from utils.auth import require_login, log_action
-from utils.ui import render_sidebar, page_header, status_badge, metric_card
+from utils.ui import render_sidebar, page_header, status_badge, metric_card, format_academic_period
 from utils.results_logic import (
     can_view_results, get_cumulative_balance, compute_semester_academic_status, compute_gpa
 )
@@ -50,7 +50,8 @@ else:
 st.markdown(
     f'<div style="background:white;border:1px solid #e5e7eb;border-radius:10px;padding:16px 20px;margin-bottom:16px;">'
     f'<strong>{student.full_name}</strong> &bull; {student.student_number} &bull; '
-    f'{student.programme.name if student.programme else "N/A"} &bull; Year {student.year_of_study}'
+    f'{student.programme.name if student.programme else "N/A"}<br>'
+    f'<span style="color:#6b7280;font-size:0.85rem;">{format_academic_period(student)}</span>'
     f'</div>',
     unsafe_allow_html=True
 )

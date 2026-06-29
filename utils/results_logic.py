@@ -326,6 +326,61 @@ def get_relevant_progress_steps(session, student) -> list:
     return steps
 
 
+def increment_academic_year_label(label: str) -> str:
+    """"2025/2026" -> "2026/2027". Returns the label unchanged if it doesn't
+    match the expected YYYY/YYYY format."""
+    try:
+        start, end = label.split("/")
+        return f"{int(start) + 1}/{int(end) + 1}"
+    except (ValueError, AttributeError):
+        return label
+
+
+def get_next_semester_step(session, student):
+    """
+    Returns (year_of_study, semester_of_study, academic_year_label) for the
+    student's NEXT semester after their current one, capped at their
+    programme's standard duration. Returns None if they're already at
+    their final semester (nothing further to roll a payment into) or have
+    no intake/progress data at all.
+
+    If that step already has a recorded IntakeProgress mapping (the cohort
+    has been promoted that far), uses its academic year. Otherwise PROJECTS
+    the academic year forward using the institution's established
+    convention: semester 1 -> 2 stays within the same academic year;
+    semester 2 -> next year's semester 1 moves to the next academic year.
+    This projection may differ from what's eventually set when the cohort
+    is actually promoted — it's a best-effort estimate for holding an
+    advance payment, not a substitute for Promote Cohort.
+    """
+    from models import IntakeProgress
+    if not student.intake_id or not student.programme:
+        return None
+    max_years = get_max_years_for_programme(student.programme)
+    cur_yos = student.year_of_study or 1
+    cur_sos = student.current_semester or 1
+
+    next_yos, next_sos = (cur_yos, 2) if cur_sos == 1 else (cur_yos + 1, 1)
+    if next_yos > max_years:
+        return None  # already at their final semester
+
+    progress = session.query(IntakeProgress).filter_by(
+        intake_id=student.intake_id, year_of_study=next_yos, semester_of_study=next_sos
+    ).first()
+    if progress:
+        return (next_yos, next_sos, progress.academic_year.label)
+
+    current_progress = session.query(IntakeProgress).filter_by(
+        intake_id=student.intake_id, year_of_study=cur_yos, semester_of_study=cur_sos
+    ).first()
+    if not current_progress:
+        return None  # no current mapping to project forward from
+
+    current_ay = current_progress.academic_year.label
+    next_ay = current_ay if cur_sos == 1 else increment_academic_year_label(current_ay)
+    return (next_yos, next_sos, next_ay)
+
+
 def get_relevant_fee_periods(session, student) -> list:
     """
     Returns [(academic_year_label, semester), ...] for every period this
@@ -352,13 +407,24 @@ def allocate_payment(
     Falls back to the student's single stored (academic_year, current_semester)
     when there's no intake/progress history (e.g. "Unconfirmed" students).
 
+    If there's still money left after clearing every known due, it's
+    applied as an ADVANCE toward the student's nearest future semester
+    (get_next_semester_step) rather than rejected outright — capped at
+    that semester's fee if a FeeStructure already exists for it, so a
+    future period can't be overpaid either. Only genuinely excess money
+    (beyond even that one extra semester, or when there's no further
+    semester to roll into — e.g. their final semester) is reported back
+    as unallocated and NOT recorded, so money is never silently lost or
+    misattributed.
+
     Returns {
         "payments_created": [Payment, ...],
-        "allocated": float,     # total amount successfully applied
-        "unallocated": float,   # leftover beyond all known dues — NOT
-                                 # recorded anywhere, so money is never
-                                 # silently lost or misattributed; caller
-                                 # must surface this to the user.
+        "allocated": float,       # total amount successfully applied
+        "advance": float,         # portion of "allocated" that went to a
+                                   # future (not-yet-current) semester
+        "advance_period": tuple or None,  # (academic_year, semester) the
+                                           # advance was applied to
+        "unallocated": float,     # genuine leftover — NOT recorded.
     }
     """
     periods = get_relevant_fee_periods(session, student)
@@ -405,9 +471,49 @@ def allocate_payment(
         payments_created.append(p)
         remaining -= apply_amt
 
+    advance_amount = 0.0
+    advance_period = None
+    if remaining > 0:
+        next_step = get_next_semester_step(session, student)
+        if next_step:
+            next_yos, next_sos, next_ay_label = next_step
+            from models import AcademicYear
+            ay_row = session.query(AcademicYear).filter_by(label=next_ay_label).first()
+            if ay_row is None:
+                ay_row = AcademicYear(label=next_ay_label)
+                session.add(ay_row)
+                session.flush()
+
+            fs = session.query(FeeStructure).filter_by(
+                programme_id=student.programme_id, academic_year=next_ay_label,
+                semester=next_sos, mode_of_study=student.mode_of_study,
+            ).first()
+            already_paid_next = session.query(sqlalchemy.func.sum(Payment.amount)).filter_by(
+                student_id=student.id, academic_year=next_ay_label, semester=next_sos
+            ).scalar() or 0.0
+            cap = (fs.total_fee - already_paid_next) if fs else remaining
+            apply_amt = min(remaining, cap) if cap is not None else remaining
+            if apply_amt > 0:
+                p = Payment(
+                    student_id=student.id, academic_year=next_ay_label, semester=next_sos,
+                    amount=round(apply_amt, 2), method=method, reference=reference,
+                    received_by=received_by,
+                    notes=(f"{notes} — " if notes else "") + (
+                        f"Advance toward Year {next_yos} Semester {next_sos} "
+                        f"({next_ay_label}), ahead of the student's current semester."
+                    ),
+                )
+                session.add(p)
+                payments_created.append(p)
+                advance_amount = round(apply_amt, 2)
+                advance_period = (next_ay_label, next_sos)
+                remaining -= apply_amt
+
     return {
         "payments_created": payments_created,
         "allocated": round(amount - remaining, 2),
+        "advance": advance_amount,
+        "advance_period": advance_period,
         "unallocated": round(max(0.0, remaining), 2),
     }
 
