@@ -856,6 +856,13 @@ def promote_cohort(session, intake_id: int, year_of_study: int, semester_of_stud
     """
     from models import Student, IntakeProgress, StudentStatus
 
+    # Unset is_current on whichever step was previously current for this
+    # intake — otherwise after promotion the OLD step would still show as
+    # current alongside (or instead of) the new one.
+    session.query(IntakeProgress).filter_by(
+        intake_id=intake_id, is_current=True
+    ).update({"is_current": False})
+
     progress = session.query(IntakeProgress).filter_by(
         intake_id=intake_id, year_of_study=year_of_study, semester_of_study=semester_of_study
     ).first()
@@ -863,10 +870,12 @@ def promote_cohort(session, intake_id: int, year_of_study: int, semester_of_stud
         progress = IntakeProgress(
             intake_id=intake_id, year_of_study=year_of_study,
             semester_of_study=semester_of_study, academic_year_id=academic_year_id,
+            is_current=True,
         )
         session.add(progress)
     else:
         progress.academic_year_id = academic_year_id
+        progress.is_current = True
     session.flush()
 
     academic_year_label = progress.academic_year.label
