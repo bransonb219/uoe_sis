@@ -17,3 +17,4 @@ data_uploads/
 data_entry_templates/*_accurate.csv
 *_backup_*.csv
 payments_backup*.csv
+fresh_start_backup/
