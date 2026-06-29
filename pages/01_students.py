@@ -293,13 +293,20 @@ if can_manage:
 
                     if st.form_submit_button("Save Changes", type="primary"):
                         target_intake = next((i for i in edit_intakes if i.code == intake_edit_sel), None) if intake_edit_sel else s.intake
-                        derived_academic_year = (
-                            get_academic_year_for_progress(db, target_intake.id, yr, sem_edit)
-                            if target_intake else None
-                        )
+                        # UNCONFIRMED/LEGACY are deliberate placeholder buckets with no
+                        # cohort-progress mapping by design — don't block ordinary edits
+                        # (e.g. fixing a phone number) for students still in them pending
+                        # reconciliation. Only real intakes require a valid mapping.
+                        is_placeholder_intake = bool(target_intake and target_intake.code in ("UNCONFIRMED", "LEGACY"))
+                        if is_placeholder_intake:
+                            derived_academic_year = s.academic_year
+                        elif target_intake:
+                            derived_academic_year = get_academic_year_for_progress(db, target_intake.id, yr, sem_edit)
+                        else:
+                            derived_academic_year = None
                         if not target_intake:
                             st.error("Select an Intake — add one in Settings → Intakes & Cohorts first if none exist.")
-                        elif not derived_academic_year:
+                        elif not derived_academic_year and not is_placeholder_intake:
                             st.error(
                                 f"No cohort-progress mapping for intake '{target_intake.code}' Year {yr} "
                                 f"Semester {sem_edit}. Set this up in Settings → Intakes & Cohorts "
