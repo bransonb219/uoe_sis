@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from utils.db import get_db
 from utils.auth import require_login, log_action
 from utils.ui import render_sidebar, page_header, metric_card, status_badge
-from utils.results_logic import get_payment_percentage, get_cumulative_balance
+from utils.results_logic import get_payment_percentage, get_cumulative_balance, allocate_payment
 from models import Student, Payment, FeeStructure, Programme, PaymentStatus, UserRole, AcademicYear, Intake
 from datetime import datetime
 import pandas as pd
@@ -125,14 +125,36 @@ with tab_record:
         st.warning("Only Finance or Admin can record payments.")
     else:
         st.subheader("Record New Payment")
+        st.caption(
+            "Enter the total amount received. It's automatically allocated "
+            "across the student's oldest unpaid semester(s) first — no "
+            "single semester is ever pushed into overpayment. Any amount "
+            "beyond all known dues is reported back, not recorded."
+        )
+
+        lookup_snum = st.text_input("Student Number", key="record_payment_lookup")
+        lookup_student = None
+        if lookup_snum:
+            lookup_student = db.query(Student).filter_by(student_number=lookup_snum.strip()).first()
+            if not lookup_student:
+                st.error("Student not found.")
+            else:
+                preview_fees, preview_paid, preview_outstanding = get_cumulative_balance(db, lookup_student.id)
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    metric_card("Name", lookup_student.full_name)
+                with c2:
+                    metric_card("Total Paid to Date", f"K{preview_paid:,.2f}", "#166534")
+                with c3:
+                    metric_card("Current Outstanding", f"K{preview_outstanding:,.2f}",
+                                "#166534" if preview_outstanding <= 0 else "#991b1b")
+
         with st.form("record_payment"):
             c1, c2 = st.columns(2)
             with c1:
-                p_snum = st.text_input("Student Number *")
-                p_year = st.text_input("Academic Year *", "2024/2025")
-                p_sem = st.selectbox("Semester *", [1, 2])
+                p_snum = st.text_input("Student Number * (confirm)", value=lookup_snum)
+                p_amount = st.number_input("Amount Received (K) *", 0.0, step=50.0)
             with c2:
-                p_amount = st.number_input("Amount (K) *", 0.0, step=50.0)
                 p_method = st.selectbox("Payment Method", ["Bank Transfer", "Mobile Money", "Cash", "Cheque"])
                 p_ref = st.text_input("Reference Number")
 
@@ -145,21 +167,29 @@ with tab_record:
             elif p_amount <= 0:
                 st.error("Amount must be greater than zero.")
             else:
-                payment = Payment(
-                    student_id=student.id,
-                    academic_year=p_year,
-                    semester=p_sem,
-                    amount=p_amount,
-                    reference=p_ref or f"PAY{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
-                    method=p_method,
-                    status=PaymentStatus.COMPLETED,
-                    received_by=user["id"]
+                ref = p_ref or f"PAY{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
+                result = allocate_payment(
+                    db, student, p_amount, method=p_method, reference=ref,
+                    received_by=user["id"],
                 )
-                db.add(payment)
                 db.commit()
-                log_action(db, "RECORD_PAYMENT", "Payment", payment.id,
-                           f"{p_snum}: K{p_amount:,.2f}")
-                st.success(f"Payment of K{p_amount:,.2f} recorded for {student.full_name}.")
+                for p in result["payments_created"]:
+                    log_action(db, "RECORD_PAYMENT", "Payment", p.id,
+                               f"{p_snum}: K{p.amount:,.2f} -> {p.academic_year} Sem{p.semester}")
+
+                if result["payments_created"]:
+                    st.success(f"Allocated K{result['allocated']:,.2f} for {student.full_name}:")
+                    for p in result["payments_created"]:
+                        st.caption(f"  • {p.academic_year} Semester {p.semester}: K{p.amount:,.2f}")
+                if result["unallocated"] > 0:
+                    st.warning(
+                        f"K{result['unallocated']:,.2f} could NOT be allocated — it exceeds all "
+                        f"known dues through {student.full_name}'s current semester. This amount "
+                        f"has NOT been recorded. If it's an advance for an upcoming semester, wait "
+                        f"until that period is opened (Promote Cohort) before recording it."
+                    )
+                if not result["payments_created"] and result["unallocated"] == 0:
+                    st.info("Nothing to allocate — no fee structure found for this student's periods.")
 
 
 # ─────────────────────────── FEE OVERVIEW ─────────────────────

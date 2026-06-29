@@ -14,6 +14,7 @@ from models import (
     Payment, User, FeeStructure, Gender, StudentStatus, EnrolmentStatus,
     UserRole, PaymentStatus, ModeOfStudy, ProgrammeLevel, Result, Exemption
 )
+from utils.results_logic import allocate_payment
 from datetime import datetime
 import pandas as pd
 import io
@@ -469,8 +470,13 @@ with tab_courses:
 with tab_payments:
     st.subheader("Import Payments")
     st.caption(
-        "Required columns: student_number, academic_year, semester, amount. "
-        "Optional: method, reference."
+        "Required columns: student_number, amount. Optional: method, reference. "
+        "Each amount is automatically allocated across the student's oldest "
+        "unpaid semester(s) first — no single semester is ever pushed into "
+        "overpayment. academic_year/semester columns, if present, are kept "
+        "as a note for reference only and do NOT dictate where the payment "
+        "is applied. Rows are processed in file order, so list a student's "
+        "payments chronologically if they have more than one."
     )
     f_payments = st.file_uploader("Upload Payments File", type=["xlsx", "xls", "csv"], key="up_payments")
 
@@ -483,14 +489,15 @@ with tab_payments:
             df = None
 
         if df is not None:
-            required = {"student_number", "academic_year", "semester", "amount"}
+            required = {"student_number", "amount"}
             missing = required - set(df.columns)
             if missing:
                 st.error(f"Missing required columns: {missing}")
             else:
                 st.dataframe(df.head(10), use_container_width=True)
                 if st.button("Run Import", type="primary", key="run_payments"):
-                    created, errors = 0, []
+                    created, fully_unallocated, errors = 0, 0, []
+                    total_unallocated = 0.0
                     for idx, row in df.iterrows():
                         try:
                             student = db.query(Student).filter_by(
@@ -499,25 +506,37 @@ with tab_payments:
                             if not student:
                                 errors.append(f"Row {idx+2}: Student not found")
                                 continue
-                            p = Payment(
-                                student_id=student.id,
-                                academic_year=str(row["academic_year"]).strip(),
-                                semester=int(row["semester"]),
-                                amount=float(row["amount"]),
+                            file_note = None
+                            if row.get("academic_year") or row.get("semester"):
+                                file_note = f"File stated: {clean_str(row.get('academic_year'))} Sem{clean_str(row.get('semester'))}"
+                            result = allocate_payment(
+                                db, student, float(row["amount"]),
                                 method=clean_str(row.get("method"), "Bank Transfer"),
                                 reference=clean_str(row.get("reference")) or None,
-                                status=PaymentStatus.COMPLETED,
-                                received_by=user["id"]
+                                received_by=user["id"], notes=file_note,
                             )
-                            db.add(p)
-                            created += 1
+                            created += len(result["payments_created"])
+                            if result["unallocated"] > 0:
+                                fully_unallocated += 1
+                                total_unallocated += result["unallocated"]
+                                errors.append(
+                                    f"Row {idx+2} ({student.student_number}): K{result['unallocated']:,.2f} "
+                                    f"could not be allocated — exceeds all known dues, NOT recorded."
+                                )
                         except Exception as e:
                             errors.append(f"Row {idx+2}: {e}")
                     db.commit()
-                    log_action(db, "ETL_IMPORT_PAYMENTS", "Payment", None, f"Created {created}")
-                    st.success(f"✅ Imported {created} payment(s).")
+                    log_action(db, "ETL_IMPORT_PAYMENTS", "Payment", None,
+                               f"Created {created} payment record(s) across rows; "
+                               f"{fully_unallocated} row(s) had unallocated amounts totalling K{total_unallocated:,.2f}")
+                    st.success(f"✅ Created {created} payment record(s) from the file's rows.")
+                    if total_unallocated > 0:
+                        st.warning(
+                            f"K{total_unallocated:,.2f} across {fully_unallocated} row(s) could not be "
+                            f"allocated and was NOT recorded — see details below."
+                        )
                     if errors:
-                        with st.expander(f"{len(errors)} error(s)"):
+                        with st.expander(f"{len(errors)} note(s)/error(s)"):
                             for e in errors:
                                 st.warning(e)
 

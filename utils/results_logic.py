@@ -339,6 +339,79 @@ def get_relevant_fee_periods(session, student) -> list:
     return [(ay, sos) for _, sos, ay in get_relevant_progress_steps(session, student)]
 
 
+def allocate_payment(
+    session, student, amount: float, method: str = None,
+    reference: str = None, received_by: int = None, notes: str = None,
+) -> dict:
+    """
+    Allocates a payment across the student's outstanding periods, oldest
+    unpaid first, never letting any single semester's recorded payments
+    exceed that semester's fee. Creates one Payment row per period actually
+    touched (skips periods already fully paid).
+
+    Falls back to the student's single stored (academic_year, current_semester)
+    when there's no intake/progress history (e.g. "Unconfirmed" students).
+
+    Returns {
+        "payments_created": [Payment, ...],
+        "allocated": float,     # total amount successfully applied
+        "unallocated": float,   # leftover beyond all known dues — NOT
+                                 # recorded anywhere, so money is never
+                                 # silently lost or misattributed; caller
+                                 # must surface this to the user.
+    }
+    """
+    periods = get_relevant_fee_periods(session, student)
+    if not periods and student.academic_year:
+        periods = [(student.academic_year, student.current_semester or 1)]
+
+    remaining = amount
+    payments_created = []
+    # Student.fee_adjustment is a single lump scholarship/discount (negative)
+    # or surcharge (positive) vs the shared fee structure — it isn't tied to
+    # a specific period. It's applied entirely against the LAST (most
+    # recent/current) period, consistent with how it was originally
+    # calibrated: earlier periods are filled to their flat fee first, so any
+    # mismatch between the flat total and the student's true total always
+    # surfaces at whichever period was current at calibration time.
+    fee_adjustment = student.fee_adjustment or 0.0
+    last_period_index = len(periods) - 1
+
+    for idx, (ay_label, sem) in enumerate(periods):
+        if remaining <= 0:
+            break
+        fs = session.query(FeeStructure).filter_by(
+            programme_id=student.programme_id, academic_year=ay_label,
+            semester=sem, mode_of_study=student.mode_of_study,
+        ).first()
+        if not fs or fs.total_fee <= 0:
+            continue
+
+        effective_fee = fs.total_fee + (fee_adjustment if idx == last_period_index else 0.0)
+        already_paid = session.query(sqlalchemy.func.sum(Payment.amount)).filter_by(
+            student_id=student.id, academic_year=ay_label, semester=sem
+        ).scalar() or 0.0
+        remaining_for_period = effective_fee - already_paid
+        if remaining_for_period <= 0:
+            continue  # this period is already fully paid — never push it over
+
+        apply_amt = min(remaining, remaining_for_period)
+        p = Payment(
+            student_id=student.id, academic_year=ay_label, semester=sem,
+            amount=round(apply_amt, 2), method=method, reference=reference,
+            received_by=received_by, notes=notes,
+        )
+        session.add(p)
+        payments_created.append(p)
+        remaining -= apply_amt
+
+    return {
+        "payments_created": payments_created,
+        "allocated": round(amount - remaining, 2),
+        "unallocated": round(max(0.0, remaining), 2),
+    }
+
+
 def get_payment_percentage(session, student_id: int, academic_year: str, semester: int) -> float:
     """Returns fraction (0.0–1.0) of the semester fee paid, scoped to student's mode_of_study."""
     from models import Student
